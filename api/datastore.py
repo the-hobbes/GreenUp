@@ -14,6 +14,10 @@ from google.appengine.datastore import entity_pb
 
 import logging 
 
+from datetime import date
+
+from constants import *
+
 TYPES_AVAILABLE = ['General Message', 'Help Needed', 'Trash Pickup']
 MEMCACHED_WRITE_KEY = "write_key"
 STALE_CACHE_LIMIT = 20
@@ -28,7 +32,8 @@ class Greenup(Campaign):
 
 class Pins(Greenup):
 	message = db.TextProperty()
-	pinType = db.StringProperty(choices=('General Message', 'Help Needed', 'Trash Pickup'))
+	pinType = db.StringProperty(choices=PIN_TYPES)
+	# these must be stored precisely
 	lat = db.FloatProperty()
 	lon = db.FloatProperty()
 
@@ -47,17 +52,18 @@ class Pins(Greenup):
 		return bt
 
 	@classmethod
-	def by_lat(cls,lat):
-		latitudes = Pins.all().filter('lat =', lat).get()
+	def by_lat(cls,lat, precision=5):
+		latitudes = Pins.all().filter('lat =', lat).get()		
 		return latitudes
 
 	@classmethod
-	def by_lon(cls,lon):
+	def by_lon(cls,lon, precision=5):
 		longitudes = Pins.all().filter('lon =', lon).get()
 		return longitudes
 
 class Comments(Greenup):
-	commentType = db.StringProperty(choices=('General Message', 'Help Needed', 'Trash Pickup'))
+
+	commentType = db.StringProperty(choices=COMMENT_TYPES)
 	message = db.TextProperty()
 	timeSent = db.DateTimeProperty(auto_now_add = True)	
 	pin = db.ReferenceProperty(Pins, collection_name ='pins')
@@ -68,7 +74,8 @@ class Comments(Greenup):
 	
 	@classmethod
 	def by_type(cls,cType):
-		ct = Comments.all().filter('commentType =', cType).get()
+		ct = Comments.all().filter('commentType =', cType).get()	
+		return ct
 
 class GridPoints(Greenup):
 	lat = db.FloatProperty()
@@ -92,6 +99,7 @@ class GridPoints(Greenup):
 	@classmethod
 	def by_latOffset(cls, latDegrees, offset):
 		# query all points with a latitude between latDegrees and offset
+		# this defines a chunk of the map containing the desired points
 		q = GridPoints().all().filter('lat >=', latDegrees).filter('lat <=', latDegrees + offset).get()
 		return q
 
@@ -100,6 +108,12 @@ class GridPoints(Greenup):
 		# query all points with a latitude between lonDegrees and offset
 		q = GridPoints().all().filter('lon >=', lonDegrees).filter('lon <=', lonDegrees + offset).get()
 		return q
+
+	# then we need to make a function that runs through that chunk and bucket-izes each point by rounding it (and stores the 
+	# seconds worked for each of those points that went into the bucket) [see bucket sort or alpha sort]. this could be a function
+	# separate from the datastore. 
+	# we are returing these buckets (the rounded center of each of those buckets, and the total seconds worked corresponding to
+	# each of those buckets).
 
 '''
 	Abstraction Layer between the user and the datastore, containing methods to processes requests by the endpoints.
@@ -111,9 +125,14 @@ class AbstractionLayer():
 		app = Greenup()
 		self.appKey = Greenup.app_key()
 
-	def getComments(self, type=None, page=None):
+	def getComments(self, cType=None, page=None):
 		# memcache or datastore read
-		pass
+		comments=  paging(page,cType)
+		#Convert comments to simple dictionaries for the comments endpoint to use
+		dictComments = []
+		for comment in comments:
+			dictComments.append({'commentType' : comment.commentType, 'message' : comment.message, 'pin' : comment.pin, 'timestamp' : comment.timeSent.ctime(), 'id' : comment.key().id()})
+		return dictComments
 
 	def submitComments(self, commentType, message, pin=None):
 		# datastore write
@@ -204,8 +223,8 @@ def initialPage():
 		in the cache (the first one).
 	'''
 	querySet = Comments.all()
-	initialCursorKey = 'greeunup_comment_paging_cursor_%s' %(1)
-	initialPageKey = 'greenup_comments_page_%s' %(1)
+	initialCursorKey = 'greeunup_comment_paging_cursor_%s_%s' %(1,None)
+	initialPageKey = 'greenup_comments_page_%s_%s' %(1,None)
 
 	results = querySet[0:20]
 	# results = querySet.run(batch_size=20)
@@ -216,7 +235,7 @@ def initialPage():
 	commentsCursor = querySet.cursor()
 	memcache.set(initialCursorKey, commentsCursor)
 
-def paging(page):
+def paging(page,typeFilter):
 	'''
 		Paging works thusly:
 		Try to find the cursor key for the page passed in. If you find it, look it up in cache and return it.
@@ -225,8 +244,15 @@ def paging(page):
 		and their cursors up until we reach the page requested. Then, return that page of results.
 	'''
 	resultsPerPage = 20
-	querySet = Comments.all() # note that this hasn't been run yet
-	currentCursorKey = 'greeunup_comment_paging_cursor_%s' %(page)
+	querySet = None
+	if typeFilter is not None:
+		querySet = Comments.by_type(typeFilter)
+	else:
+		querySet = Comments.all()
+	if page is None:
+		page = 1
+
+	currentCursorKey = 'greeunup_comment_paging_cursor_%s_%s' %(page,typeFilter)
 	pageInCache = memcache.get(currentCursorKey)
 	misses = []
 
@@ -238,7 +264,7 @@ def paging(page):
 		# if there is no such item in memecache. we must build up all pages up to 'page' in memecache
 		for x in range(page - 1,0, -1):
 			# check to see if the page key x is in cache
-			prevCursorKey = 'greeunup_comment_paging_cursor_%s' %(x)
+			prevCursorKey = 'greeunup_comment_paging_cursor_%s' %(x,typeFilter)
 			prevPageInCache = memcache.get(prevCursorKey)
 
 			if not prevPageInCache:
@@ -250,7 +276,7 @@ def paging(page):
 			# get the cursor of the previous page
 			cursorKey = misses.pop()
 			oldNum = int(cursorKey[-1]) - 1
-			oldKey = 'greeunup_comment_paging_cursor_%s' %(oldNum)
+			oldKey = 'greeunup_comment_paging_cursor_%s_%s' %(oldNum,typeFilter)
 			cursor = memcache.get(oldKey)
 
 			# get 20 results from where we left off
@@ -264,12 +290,14 @@ def paging(page):
 			memcache.set(cursorKey, commentsCursor)
 
 			# save those results in memecache with thier own key
-			pageKey = 'greenup_comments_page_%s' %(cursorKey[-1])
+			pageKey = 'greenup_comments_page_%s_%s' %(cursorKey[-1],typeFilter)
 			memcache.set(pageKey, serialize_entities(items))
 
 		# here is where we return the results for page = 'page', now that we've built all the pages up to 'page'
-		prevCursor = 'greeunup_comment_paging_cursor_%s' %(page-1)
-		cursor = memcache.get(prevCursor)	
+		prevCursor = 'greeunup_comment_paging_cursor_%s_%s' %(page-1,typeFilter)
+		cursor = memcache.get(prevCursor)
+		#This causes an error on initial write. Not sure how to fix it, the querySet is None
+		#Phelan can you fix this?
 		results = querySet.with_cursor(start_cursor=cursor)
 		results = results.run(limit=resultsPerPage)
 
@@ -280,13 +308,13 @@ def paging(page):
 		memcache.set(currentCursorKey, commentsCursor)
 
 		# save results in memecache with key
-		pageKey = 'greenup_comments_page_%s' %(page)
+		pageKey = 'greenup_comments_page_%s_%s' %(page,typeFilter)
 		memcache.set(pageKey, serialize_entities(results))
 
 		return items
 
 	# otherwise, just get the page out of memcache
 	print "did this instead, cause it was in the cache"
-	pageKey = "greenup_comments_page_%s" %(page)
+	pageKey = "greenup_comments_page_%s_%s" %(page,typeFilter)
 	results = deserialize_entities(memcache.get(pageKey))
 	return results
