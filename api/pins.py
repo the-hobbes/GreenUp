@@ -3,11 +3,11 @@ from google.appengine.ext import db
 
 import webapp2
 import json
-
 import api
 
-#This shoudl be placed into some type of properties file or something along with the rest of the propertie esk settings
-PIN_TYPES = ['GENERAL MESSAGE', 'HELP NEEDED', 'TRASH PICKUP']
+from datastore import Pins as DBPins
+from constants import *
+from datastore import *
 
 class Pins(webapp2.RequestHandler):
 
@@ -19,8 +19,16 @@ class Pins(webapp2.RequestHandler):
 		lonDegrees = self.request.get("lonDegrees")
 		latOffset = self.request.get("latOffset")
 		lonOffset = self.request.get("lonOffset")
-		precision = self.request.get("precision")
 		
+		if latDegrees == "":
+			latDegrees = None
+		if lonDegrees == "":
+			lonDegrees = None
+		if lonOffset == "":
+			lonOffset = None
+		if latOffset == "":
+			latOffset = None
+
 		#validate parameters
 		if latDegrees:
 			try:
@@ -29,15 +37,15 @@ class Pins(webapp2.RequestHandler):
 				#check range
 				latDegrees = float(latDegrees)
 				if latDegrees < -180.0 or latDegrees > 180.0:
-					raise api.SemanticError("latDegrees must be within the range of -180.0 and 180.0")
+					raise SemanticError("latDegrees must be within the range of -180.0 and 180.0")
 				parameters+= 1
 			except ValueError, v:
 				#Syntactic error
-				self.response.set_status(api.HTTP_REQUEST_SYNTAX_PROBLEM)
+				self.response.set_status(HTTP_REQUEST_SYNTAX_PROBLEM)
 				self.response.write('{"Error_Message" : "latDegrees parameter must be numeric"}')
 				return
-			except api.SemanticError, s:
-				self.response.set_status(api.HTTP_REQUEST_SEMANTICS_PROBLEM,s.message)
+			except SemanticError, s:
+				self.response.set_status(HTTP_REQUEST_SEMANTICS_PROBLEM,s.message)
 				self.response.write('{"Error_Message" : "%s"}' % s.message)
 				return
 		
@@ -48,14 +56,14 @@ class Pins(webapp2.RequestHandler):
 				#check range
 				lonDegrees = float(lonDegrees)
 				if lonDegrees < -90.0 or lonDegrees > 90.0:
-					raise api.SemanticError("lonDegrees must be within the range of -180.0 and 180.0")
+					raise SemanticError("lonDegrees must be within the range of -180.0 and 180.0")
 				parameters+=1
 			except ValueError, v:
-				self.response.set_status(api.HTTP_REQUEST_SYNTAX_PROBLEM)
+				self.response.set_status(HTTP_REQUEST_SYNTAX_PROBLEM)
 				self.response.write('{"Error_Message" : "%s" }' % "lonDegrees parameter must be numeric")
 				return
-			except api.SemanticError, s:
-				self.response.set_status(api.HTTP_REQUEST_SEMANTICS_PROBLEM,s.message)
+			except SemanticError, s:
+				self.response.set_status(HTTP_REQUEST_SEMANTICS_PROBLEM,s.message)
 				self.response.write('{ "Error_Message" : "%s" }' % s.message)
 				return
 				
@@ -64,12 +72,11 @@ class Pins(webapp2.RequestHandler):
 		#If one offset is present the other must be too
 		#It'd be great if python had XOR for objects instead of just bitwise ^
 		if (lonOffset and not latOffset) or (latOffset and not lonOffset):
-			self.response.set_status(api.HTTP_REQUEST_SEMANTICS_PROBLEM)
+			self.response.set_status(HTTP_REQUEST_SEMANTICS_PROBLEM)
 			self.response.write('{"Error_Message" : "%s"}' % "Both lonOffset and latOffset must be present if either is used")
 			return
 
 		#the choice of lon is arbitrary, either lat or lon offset would work here
-		
 		if lonOffset:
 			try:
 				lonOffset = abs(int(lonOffset))
@@ -77,83 +84,27 @@ class Pins(webapp2.RequestHandler):
 				parameters+=2
 				#We could check to see if the offsets cause us to go out of range for our queries, but really that's unneccesary and would cause unneccesary calculation on the clientside to deal making sure they're within range.
 			except ValueError, e:
-				self.response.set_status(api.HTTP_REQUEST_SYNTAX_PROBLEM)
+				self.response.set_status(HTTP_REQUEST_SYNTAX_PROBLEM)
 				self.response.write('{"Error_Message" : "Offsets defined must both be integers" }')
 				return
 
-		
-		#Check precision
-		if precision:
-			try:
-				precision = abs(int(precision))
-				parameters += 1
-			except ValueError, e:
-				self.response.set_status(api.HTTP_REQUEST_SYNTAX_PROBLEM)
-				self.response.write('{"Error_Message" : "Precision value must be a numeric integer" '  )
-				return
-			else:
-				precision = api.DEFAULT_ROUNDING_PRECISION
-				
-
 		#If no parameters are specified we'll return everything we have for them
 		response = []
-		
-		if parameters == 0:
-			#Return everything
-			response = []
-		else:
-			#Figure out what type of query to make depending on the parameters we have available
-			if not lonOffset and latDegrees and not lonDegrees:
-				#Only specified latDegrees
-				#Round latDegrees by precision value:
-				latDegrees = round(latDegrees,precision) 
-				response = GridPoints.by_lat(latDegrees)
-				if not response:
-					response = []
-			elif not lonOffset and lonDegrees and not latDegrees:
-				#Only specified lonDegrees
-				lonDegrees = round(lonDegrees,precision)
-				response = GridPoints.by_lon(lonDegrees)
-				if not response:
-					response = []
-			elif not lonOffset and latDegrees and lonDegrees:
-				#We have both lon and lat degrees
-				lonDegrees = round(lonDegrees,precision)
-				latDegrees = round(latDegrees,precision)
-				pass
-				#Do query for both (not implemented yet)
-			elif lonOffset and ((latDegrees and not lonDegrees) or (not latDegrees and lonDegrees)):
-				#Do query for degrees with offsets
-				if latDegrees:
-					#Do query for latitude with an offset
-					pass
-				elif lonDegrees:
-					#Do query for longitude with an offset
-					pass
-				pass
-			elif lonOffset and latDegrees and lonDegrees:
-				#We have offsets and both degrees, fire off the bounds request
-				pass
-			else:
-				#No degrees specified and offsets or just precision?
-				#This is a bad request.
-				self.response.set_status(api.HTTP_REQUEST_SEMANTICS_PROBLEM)
-				self.response.write('{"Error_Message" : "Improperly formed query, if offsets or precision specified, at least one degree must be given"}')
-				return
-
-
+		layer = AbstractionLayer()
+		#Return data
+		response = layer.getPins(latDegrees=latDegrees, latOffset=latOffset, lonDegrees=lonDegrees, lonOffset=lonOffset)
 		#By this point we have a response and we simply have to send it back
-		self.response.set_status(api.HTTP_OK)
-		self.response.write(json.dumps(response))	
+		self.response.set_status(HTTP_OK)
+		self.response.write(json.dumps(response))
 
 	def post(self):
-		self.response.set_status(api.HTTP_NOT_IMPLEMENTED)
+		self.response.set_status(HTTP_OK)
 
 		try:
 			json.loads(self.request.body)
 		except Exception, e:
 			#The request body is malformed. 
-			self.response.set_status(api.HTTP_REQUEST_SYNTAX_PROBLEM)
+			self.response.set_status(HTTP_REQUEST_SYNTAX_PROBLEM)
 			self.response.write('{"Error_Message" : "Request body is malformed"}')
 			#Don't allow execution to proceed any further than this
 			return
@@ -166,7 +117,7 @@ class Pins(webapp2.RequestHandler):
 			info['message']
 		except Exception, e:
 			#Improper request
-			self.response.set_status(api.HTTP_REQUEST_SEMANTICS_PROBLEM)
+			self.response.set_status(HTTP_REQUEST_SYNTAX_PROBLEM)
 			self.response.write('{"Error_Message" : "Required keys not present in request"}')
 			return
 		
@@ -175,9 +126,15 @@ class Pins(webapp2.RequestHandler):
 		lonDegrees = info['lonDegrees']
 		message = info['message']
 
+		#Catch nulls
+		if pinType is None or latDegrees is None or lonDegrees is None or message is None:
+			self.response.set_status(HTTP_REQUEST_SEMANTICS_PROBLEM)
+			self.response.write('{"Error_Message" : "Cannot accept null data for required parameters" }')
+			return
+
 		#Determine if the type is correct:
 		if pinType.upper() not in PIN_TYPES:
-			self.response.set_status(api.HTTP_REQUEST_SEMANTICS_PROBLEM)
+			self.response.set_status(HTTP_REQUEST_SEMANTICS_PROBLEM)
 			self.response.write('{"Error_Message" : "Pin type not a valid type." }')
 			return
 
@@ -185,13 +142,13 @@ class Pins(webapp2.RequestHandler):
 		try:
 			latDegrees = float(latDegrees)
 			if latDegrees  < -180.0 or latDegrees > 180.0:
-				raise api.SemanticError("Lat degrees must be within the range between -180.0 and 180.0")
+				raise SemanticError("Lat degrees must be within the range between -180.0 and 180.0")
 		except ValueError, e:
-			self.response.set_status(api.HTTP_REQUEST_SYNTAX_PROBLEM)
+			self.response.set_status(HTTP_REQUEST_SYNTAX_PROBLEM)
 			self.response.write('{"Error_Message" : "Lat degrees must be a numeric value" }')
 			return
-		except api.SemanticError,s:
-			self.response.set_status(api.HTTP_REQUEST_SEMANTICS_PROBLEM)
+		except SemanticError,s:
+			self.response.set_status(HTTP_REQUEST_SEMANTICS_PROBLEM)
 			self.response.write('{"Error_Message" : "%s" }' % s.message)
 			return
 		
@@ -199,23 +156,24 @@ class Pins(webapp2.RequestHandler):
 		try:
 			lonDegrees = float(lonDegrees)
 			if lonDegrees < -90.0 or lonDegrees > 90.0:
-				raise api.SemanticError("Lon degrees must be within the range of -90.0 and 90.0")
+				raise SemanticError("Lon degrees must be within the range of -90.0 and 90.0")
 		except ValueError, e:
-			self.response.set_status(api.HTTP_REQUEST_SYNTAX_PROBLEM)
+			self.response.set_status(HTTP_REQUEST_SYNTAX_PROBLEM)
 			self.response.write('{"Error_Message" : "Lon degrees must be a numeric value"}')
 			return
-		except api.SemanticError, s:
-			self.response.set_status(api.HTTP_REQUEST_SEMANTICS_PROBLEM)
+		except SemanticError, s:
+			self.response.set_status(HTTP_REQUEST_SEMANTICS_PROBLEM)
 			self.response.write('{"Error_Message" : "%s"}' % s.message)
 			return
 
 		#Don't know what to do about the message. perhaps just escape it or something I guess?
 
 		#Place the pin into the datastore
-		
+		layer = AbstractionLayer()
+		layer.submitPin(latDegrees=latDegrees, lonDegrees=lonDegrees, pinType=pinType.upper(), message=message)
 
-		#self.response.set_status(api.HTTP_OK)		
-		self.response.write('{  "status" : 200,  "message" : "Successful submit",}')
+		#self.response.set_status(HTTP_OK)		
+		self.response.write('{  "status" : 200,  "message" : "Successful submit"}')
 
 		
 
