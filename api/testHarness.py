@@ -8,6 +8,7 @@ from datastore import *
 import pickle
 import random
 from random import shuffle
+import json
 
 class DummyData():
 	# used to seed datastore with dummy data
@@ -21,26 +22,28 @@ class DummyData():
 		
 		inputFloats = []
 		inputStrings = []
-		inputTypes = []
+		commentInputTypes = []
 		inputSeconds = []
+		pinsInputTypes = []
 
 		for i in range(1,100):
-			inputFloats.append( float( "{0:.5f}".format(random.uniform(0.0, 2.0)) ) )
+			inputFloats.append( float( "{0:.7f}".format(random.uniform(0.0, 2.0)) ) )
 			inputSeconds.append( float(random.uniform(0.0, 10)) )
 			inputStrings.append( splt[int(random.uniform(0, len(splt)))] )
-			inputTypes.append( TYPES_AVAILABLE[int(random.uniform(0, len(TYPES_AVAILABLE)))] )
+			commentInputTypes.append( COMMENT_TYPES[int(random.uniform(0, len(COMMENT_TYPES)))] )
+			pinsInputTypes.append( PIN_TYPES[int(random.uniform(0, len(PIN_TYPES)))] )
 
 		# write dummy data to the datastore through the abstraction layer
 		al = AbstractionLayer()
 
 		for i in range(0,99):		
-			al.submitComments(inputTypes[i%len(inputTypes)], inputStrings[i%len(inputStrings)])
-			al.updateHeatmap(inputFloats[i], inputFloats[i], inputSeconds[i])
-			al.submitPin(inputFloats[i], inputFloats[i], inputTypes[i%len(inputTypes)], inputStrings[i%len(inputStrings)])
+			al.submitComments(commentInputTypes[i%len(commentInputTypes)], inputStrings[i%len(inputStrings)])
+			# al.updateHeatmap(inputFloats[i], inputFloats[i], inputSeconds[i])
+			al.submitPin(inputFloats[i], inputFloats[i], pinsInputTypes[i%len(pinsInputTypes)], inputStrings[i%len(inputStrings)])
 
-			shuffle(inputFloats)
+			shuffle(pinsInputTypes)
+			shuffle(commentInputTypes)
 			shuffle(inputStrings)
-			shuffle(inputTypes)
 			shuffle(inputSeconds)
 
 
@@ -48,23 +51,34 @@ class WriteTest(Handler):
 	def get(self):
 		self.write("Got here to the write handler. The should be some data in the datastore now.")
 		d = DummyData()
-		result = getCachedData('pins')
-		logging.info(result)
+		# result = getCachedData('pins')
+		# logging.info(result)
 
 class ReadTest(Handler):
 	def get(self):
 		self.write("got here to the read handler")
+		al = AbstractionLayer()
+		# pins = al.getPins(latDegrees = 1.76, offset=3, precision = 3)
+		pins = al.getPins()
+		jp = json.dumps(pins)
+		logging.info(pins)
 
 class MemecacheViewer(Handler):
 	def get(self):
+		# NOTE: can't go over 5 pages, because there are only 100 dummy items in the datastore.
 		# self.write("hello there, check the logs")
 		# result = getCachedData('pins')
 		# for r in result:
 		# 	logging.info( r.message )
+		# memcache.flush_all()
+
+		results = paging(1, 'FORUM')
+		logging.info(results)
+		# results = paging(5)
+		# logging.info(results)
 		
-		results = paging(6)
-		# for r in results:
-		# 	print r.message
+		for r in results:
+			print r.message
 
 		# initialPage()
 		# entities = deserialize_entities(memcache.get("greenup_comments_page_1"))
