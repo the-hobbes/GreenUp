@@ -13,7 +13,7 @@ from constants import *
 
 class BetterHTTPErrorProcessor(urllib2.BaseHandler):
     # a substitute/supplement to urllib2.HTTPErrorProcessor
-    # that doesn't raise exceptions on status codes 201,204,206
+    # that doesn't raise exceptions on status codes 200,400,422,503
     def http_error_200(self, request, response, code, msg, hdrs):
         return response
     def http_error_400(self, request, response, code, msg, hdrs):
@@ -54,6 +54,7 @@ class Spider(object):
 		if self.spiderlink:
 			try:
 				raw = self.spiderlink.read()
+				#print raw #You may only read from spiderlink once! so if you need to use the value from read more than once extend the variable classwide or save it in a temporary
 				returnValue = json.loads(raw)
 				return returnValue
 			except Exception, e:
@@ -84,7 +85,6 @@ def validateCommentsGETRequest(comments_response_to_get):
 
 def validateCommentsPOSTRequest(comments_response_to_post):
 	assert comments_response_to_post is not None
-	#print comments_response_to_post
 	assert 'status' in comments_response_to_post
 	assert 'message' in comments_response_to_post
 	assert comments_response_to_post['status'] == 200
@@ -108,7 +108,6 @@ def validateHeatmapPUTRequest(heatmap_response_to_put):
 	return True
 
 def validatePINSGetRequest(pins_response_to_get):
-	print "got to validatePINSGetRequest"
 	pins_response_keys = ['latDegrees','lonDegrees','type','message']
 	assert pins_response_to_get is not None
 	for pin in pins_response_to_get:
@@ -137,7 +136,7 @@ def validateErrorMessageReturned(comments_error_response):
 if __name__ == "__main__":
 	baseURL = 'http://greenup.xenonapps.com/api' #doesn't work because of 302 instead of 307 on forwarding domain
 	baseURL = 'http://greenupapi.appspot.com/api'
-	baseURL = 'http://localhost:16084/api'
+	baseURL = 'http://localhost:30002/api'
 	#make things easier later on
 	endPoints = {'home' : baseURL,
 			'comments' : baseURL + '/comments',
